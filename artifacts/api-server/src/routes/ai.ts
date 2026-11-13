@@ -38,7 +38,7 @@ interface AiMessage {
   raw?: unknown;
 }
 interface ToolDecl { name: string; description: string; parameters: Record<string, unknown> }
-interface ChatBody { provider: "gemini" | "openai"; model?: string; system: string; messages: AiMessage[]; tools: ToolDecl[] }
+interface ChatBody { provider: "gemini" | "openai" | "groq"; model?: string; system: string; messages: AiMessage[]; tools: ToolDecl[] }
 interface ChatOut { text: string; toolCalls: ToolCall[]; raw?: unknown; model: string }
 
 class HttpError extends Error {
@@ -478,6 +478,96 @@ async function openaiChat(req: Request, body: ChatBody): Promise<ChatOut> {
   return parseResponsesOutput((JSON.parse(txt) as { output: never }).output, model);
 }
 
+// ─── Groq (OpenAI-compatible chat completions, GROQ_API) ─────────────────────
+
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+const groqKey = () =>
+  (process.env.GROQ_API || process.env.GROQ_API_KEY || "").trim().replace(/^['"]|['"]$/g, "");
+const GROQ_DEFAULT = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+const GROQ_MODELS = [GROQ_DEFAULT, "openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"].filter((m, i, a) => a.indexOf(m) === i);
+
+/** Groq's current tool-calling models are text-only, so screenshots are replaced with a note. */
+function toChatCompletionsMessages(system: string, messages: AiMessage[]) {
+  const imageNote = (list?: string[]) => (list?.length ? "\n[A screenshot was attached but this model cannot see images.]" : "");
+  const out: Record<string, unknown>[] = [{ role: "system", content: system }];
+  for (const m of messages) {
+    if (m.role === "user") {
+      out.push({ role: "user", content: `${m.text ?? ""}${imageNote(m.images)}` });
+    } else if (m.role === "assistant") {
+      const toolCalls = (m.toolCalls ?? []).map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: JSON.stringify(c.args) } }));
+      out.push({ role: "assistant", content: m.text ?? "", ...(toolCalls.length ? { tool_calls: toolCalls } : {}) });
+    } else {
+      for (const r of m.toolResults ?? []) out.push({ role: "tool", tool_call_id: r.id, content: JSON.stringify(r.result) });
+      if (m.images?.length) out.push({ role: "user", content: imageNote(m.images).trim() });
+    }
+  }
+  return out;
+}
+
+/**
+ * Groq validates tool-call arguments against the schema, and gpt-oss models send `null` for optional
+ * fields they skip. Optional properties are made nullable here and the nulls are stripped on the way back.
+ */
+function nullableOptionals(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return schema;
+  const s = { ...(schema as Record<string, unknown>) };
+  if (s.items) s.items = nullableOptionals(s.items);
+  if (s.properties && typeof s.properties === "object") {
+    const required = new Set(Array.isArray(s.required) ? (s.required as string[]) : []);
+    s.properties = Object.fromEntries(
+      Object.entries(s.properties as Record<string, unknown>).map(([k, v]) => {
+        const prop = nullableOptionals(v) as Record<string, unknown>;
+        if (required.has(k) || !prop || typeof prop.type !== "string") return [k, prop];
+        return [k, { ...prop, type: [prop.type, "null"], ...(Array.isArray(prop.enum) ? { enum: [...prop.enum, null] } : {}) }];
+      }),
+    );
+  }
+  return s;
+}
+
+function stripNulls(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripNulls);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== null).map(([k, v]) => [k, stripNulls(v)]));
+  }
+  return value;
+}
+
+async function groqChat(body: ChatBody): Promise<ChatOut> {
+  const key = groqKey();
+  if (!key) throw new HttpError(503, "GROQ_API is not set on the server.");
+  const model = body.model || GROQ_DEFAULT;
+  const tools = body.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: nullableOptionals(t.parameters) } }));
+  const res = await fetch(GROQ_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      model,
+      messages: toChatCompletionsMessages(body.system, body.messages),
+      ...(tools.length ? { tools, tool_choice: "auto", parallel_tool_calls: true } : {}),
+    }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  const txt = await res.text();
+  if (!res.ok) {
+    const retry = Number(res.headers.get("retry-after"));
+    let message = txt.slice(0, 300);
+    try { message = (JSON.parse(txt) as { error?: { message?: string } }).error?.message ?? message; } catch { /* not json */ }
+    throw new HttpError(res.status, `Groq ${res.status}: ${message}`, res.status === 429 && retry > 0 ? Math.ceil(retry) : undefined);
+  }
+  const j = JSON.parse(txt) as {
+    model?: string;
+    choices?: { message?: { content?: string | null; tool_calls?: { id: string; function: { name: string; arguments?: string } }[] } }[];
+  };
+  const msg = j.choices?.[0]?.message;
+  const toolCalls: ToolCall[] = (msg?.tool_calls ?? []).map((c) => {
+    let args: Record<string, unknown> = {};
+    try { args = stripNulls(JSON.parse(c.function.arguments || "{}")) as Record<string, unknown>; } catch { /* bad json */ }
+    return { id: c.id || callId(), name: c.function.name, args };
+  });
+  return { text: (msg?.content ?? "").trim(), toolCalls, model: j.model ?? model };
+}
+
 // ─── routes ──────────────────────────────────────────────────────────────────
 
 router.get("/ai/status", (req: Request, res: Response) => {
@@ -495,6 +585,11 @@ router.get("/ai/status", (req: Request, res: Response) => {
       apiKey: !!process.env.OPENAI_API_KEY,
       models: OAUTH_MODELS,
     },
+    groq: {
+      configured: !!groqKey(),
+      defaultModel: GROQ_DEFAULT,
+      models: GROQ_MODELS,
+    },
   });
 });
 
@@ -506,8 +601,11 @@ router.post("/ai/chat", async (req: Request, res: Response) => {
   }
   body.tools = Array.isArray(body.tools) ? body.tools : [];
   try {
-    const out = body.provider === "openai" ? await openaiChat(req, body) : await geminiChat(body);
-    res.json({ ...out, quota: body.provider === "openai" ? null : limiterFor(out.model).snapshot() });
+    const out =
+      body.provider === "openai" ? await openaiChat(req, body)
+      : body.provider === "groq" ? await groqChat(body)
+      : await geminiChat(body);
+    res.json({ ...out, quota: body.provider === "gemini" || !body.provider ? limiterFor(out.model).snapshot() : null });
   } catch (e) {
     const err = e instanceof HttpError ? e : new HttpError(500, String((e as Error)?.message ?? e));
     res.status(err.status).json({ error: err.message, retryAfterSec: err.retryAfterSec ?? null });

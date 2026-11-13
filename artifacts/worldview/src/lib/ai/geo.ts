@@ -16,16 +16,32 @@ export interface GeoHit {
 const geocodeCache = new Map<string, Promise<GeoHit | null>>();
 const reverseCache = new Map<string, Promise<string | null>>();
 
+type NominatimRow = { display_name: string; name?: string; lat: string; lon: string; boundingbox?: string[]; geojson?: GeoJSON.Geometry; type?: string; addresstype?: string; importance?: number };
+
+/**
+ * Keep Nominatim's first hit unless another is clearly more prominent. A small margin preserves its ordering for
+ * near-ties (e.g. "Georgia" the US state vs the country), while a pub named "The China" (importance ~0) loses to China.
+ */
+function pickBest(rows: NominatimRow[]): NominatimRow | undefined {
+  let best = rows[0];
+  for (const r of rows) if ((r.importance ?? 0) > (best.importance ?? 0) + 0.15) best = r;
+  return best;
+}
+
 /** Nominatim geocode with boundary polygon. Cached for the session (Nominatim asks for ≤1 req/s). */
 export function geocode(query: string, withPolygon = true): Promise<GeoHit | null> {
   const key = `${withPolygon ? 1 : 0}:${query.trim().toLowerCase()}`;
   let p = geocodeCache.get(key);
   if (!p) {
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1${withPolygon ? "&polygon_geojson=1&polygon_threshold=0.005" : ""}`;
-    p = fetch(url, { headers: { "Accept-Language": "en" } })
-      .then((r) => (r.ok ? r.json() : []))
-      .then((rows: { display_name: string; name?: string; lat: string; lon: string; boundingbox?: string[]; geojson?: GeoJSON.Geometry; type?: string; addresstype?: string }[]) => {
-        const h = rows[0];
+    const search = (q: string): Promise<NominatimRow[]> =>
+      fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5${withPolygon ? "&polygon_geojson=1&polygon_threshold=0.005" : ""}`, { headers: { "Accept-Language": "en" } })
+        .then((r) => (r.ok ? r.json() : []))
+        .catch(() => []);
+    // "the China" literally matches pubs named "The China"; the article-free query finds the country.
+    const stripped = query.replace(/^\s*the\s+/i, "").trim();
+    p = Promise.all([search(query), stripped && stripped.toLowerCase() !== query.trim().toLowerCase() ? search(stripped) : Promise.resolve([])])
+      .then(([rows, alt]) => {
+        const h = pickBest([...rows, ...alt]);
         if (!h) return null;
         const bb = h.boundingbox?.map(Number);
         return {
