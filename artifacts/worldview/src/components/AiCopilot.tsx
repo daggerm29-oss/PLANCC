@@ -8,6 +8,7 @@ import { bindAnnotations } from "../lib/ai/annotations";
 interface Status {
   gemini: { configured: boolean; defaultModel: string; models: string[]; quota: Record<string, Quota> };
   openai: { local: boolean; oauth: { signedIn: boolean; email: string | null }; apiKey: boolean; models: string[] };
+  groq?: { configured: boolean; defaultModel: string; models: string[] };
 }
 
 type LogEntry =
@@ -32,12 +33,13 @@ const TOOL_LABEL: Record<string, string> = {
   inspect_selected: "INSPECT", describe_view: "CONTEXT", capture_view: "VISUAL",
 };
 
-function readPrefs(): { provider: Provider; geminiModel: string; openaiModel: string; speakOn: boolean } {
+function readPrefs(): { provider: Provider; geminiModel: string; openaiModel: string; groqModel: string; speakOn: boolean } {
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
-    return { provider: p.provider === "openai" ? "openai" : "gemini", geminiModel: p.geminiModel ?? "", openaiModel: p.openaiModel ?? "", speakOn: p.speakOn !== false };
+    const provider: Provider = p.provider === "openai" || p.provider === "groq" ? p.provider : "gemini";
+    return { provider, geminiModel: p.geminiModel ?? "", openaiModel: p.openaiModel ?? "", groqModel: p.groqModel ?? "", speakOn: p.speakOn !== false };
   } catch {
-    return { provider: "gemini", geminiModel: "", openaiModel: "", speakOn: true };
+    return { provider: "gemini", geminiModel: "", openaiModel: "", groqModel: "", speakOn: true };
   }
 }
 
@@ -54,6 +56,7 @@ export function AiCopilot({ bridgeRef, base }: { bridgeRef: BridgeRef; base: str
   const [provider, setProvider] = useState<Provider>(prefs.provider);
   const [geminiModel, setGeminiModel] = useState(prefs.geminiModel);
   const [openaiModel, setOpenaiModel] = useState(prefs.openaiModel);
+  const [groqModel, setGroqModel] = useState(prefs.groqModel);
   const [openaiModels, setOpenaiModels] = useState<string[]>([]);
   const [speakOn, setSpeakOn] = useState(prefs.speakOn && speechOutputSupported());
   const [handsFree, setHandsFree] = useState(false);
@@ -76,7 +79,7 @@ export function AiCopilot({ bridgeRef, base }: { bridgeRef: BridgeRef; base: str
   handsFreeRef.current = handsFree;
   const busyRef = useRef(false);
 
-  const model = provider === "gemini" ? geminiModel : openaiModel;
+  const model = provider === "gemini" ? geminiModel : provider === "groq" ? groqModel : openaiModel;
   const cooldownSec = Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
 
   useEffect(() => {
@@ -84,8 +87,8 @@ export function AiCopilot({ bridgeRef, base }: { bridgeRef: BridgeRef; base: str
   });
 
   useEffect(() => {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ provider, geminiModel, openaiModel, speakOn }));
-  }, [provider, geminiModel, openaiModel, speakOn]);
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ provider, geminiModel, openaiModel, groqModel, speakOn }));
+  }, [provider, geminiModel, openaiModel, groqModel, speakOn]);
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ block: "end" });
@@ -275,7 +278,13 @@ export function AiCopilot({ bridgeRef, base }: { bridgeRef: BridgeRef; base: str
   const gemModels = status?.gemini.models ?? ["gemini-flash-latest", "gemini-flash-lite-latest"];
   const oaModels = openaiModels.length ? openaiModels : status?.openai.models ?? [];
   const openaiReady = !!status && (status.openai.apiKey || (status.openai.local && status.openai.oauth.signedIn));
-  const providerReady = provider === "gemini" ? !!status?.gemini.configured : openaiReady;
+  const groqModels = status?.groq?.models ?? ["openai/gpt-oss-120b", "openai/gpt-oss-20b"];
+  const providerReady = provider === "gemini" ? !!status?.gemini.configured : provider === "groq" ? !!status?.groq?.configured : openaiReady;
+  const modelOptions = provider === "gemini" ? gemModels : provider === "groq" ? groqModels : oaModels;
+  const modelPlaceholder =
+    provider === "gemini" ? status?.gemini.defaultModel ?? "gemini-flash-latest"
+    : provider === "groq" ? status?.groq?.defaultModel ?? "openai/gpt-oss-120b"
+    : oaModels[0] ?? "gpt-5.1";
 
   const chip = (active: boolean): React.CSSProperties => ({
     padding: "4px 10px", fontFamily: FONT, fontSize: 10.5, letterSpacing: "0.16em", cursor: "pointer", borderRadius: 4,
@@ -303,19 +312,20 @@ export function AiCopilot({ bridgeRef, base }: { bridgeRef: BridgeRef; base: str
         <div role="group" aria-label="AI provider" style={{ display: "flex", gap: 4, marginLeft: 6 }}>
           <button type="button" style={chip(provider === "gemini")} onClick={() => chooseProvider("gemini")} aria-pressed={provider === "gemini"}>GEMINI</button>
           <button type="button" style={chip(provider === "openai")} onClick={() => chooseProvider("openai")} aria-pressed={provider === "openai"}>OPENAI</button>
+          <button type="button" style={chip(provider === "groq")} onClick={() => chooseProvider("groq")} aria-pressed={provider === "groq"}>GROQ</button>
         </div>
         <label style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 140 }}>
           <span className="sr-only" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>Model</span>
           <input
             list={`ai-models-${provider}`}
             value={model}
-            placeholder={provider === "gemini" ? status?.gemini.defaultModel ?? "gemini-flash-latest" : oaModels[0] ?? "gpt-5.1"}
-            onChange={(e) => (provider === "gemini" ? setGeminiModel(e.target.value) : setOpenaiModel(e.target.value))}
+            placeholder={modelPlaceholder}
+            onChange={(e) => (provider === "gemini" ? setGeminiModel(e.target.value) : provider === "groq" ? setGroqModel(e.target.value) : setOpenaiModel(e.target.value))}
             onFocus={() => { if (provider === "openai" && !openaiModels.length) void loadOpenaiModels(); }}
             style={{ width: "100%", background: "rgba(125,249,255,0.05)", border: `1px solid ${ACCENT}33`, borderRadius: 4, color: ACCENT, fontFamily: FONT, fontSize: 11, padding: "4px 8px" }}
           />
           <datalist id={`ai-models-${provider}`}>
-            {(provider === "gemini" ? gemModels : oaModels).map((m) => <option key={m} value={m} />)}
+            {modelOptions.map((m) => <option key={m} value={m} />)}
           </datalist>
         </label>
         <button type="button" style={iconBtn(speakOn)} onClick={() => { if (speakOn) stopSpeaking(); setSpeakOn((v) => !v); }} aria-pressed={speakOn} aria-label={speakOn ? "Mute voice replies" : "Speak replies"} disabled={!speechOutputSupported()}>
@@ -338,6 +348,12 @@ export function AiCopilot({ bridgeRef, base }: { bridgeRef: BridgeRef; base: str
               <Zap size={10} style={{ verticalAlign: -1, marginRight: 4 }} aria-hidden="true" />
               {quota ? `${quota.usedMinute}/${quota.rpm} RPM · ${quota.usedToday}/${quota.rpd} TODAY` : "FREE TIER"}
             </span>
+          )
+        ) : provider === "groq" ? (
+          !status ? null : status.groq?.configured ? (
+            <span><Zap size={10} style={{ verticalAlign: -1, marginRight: 4 }} aria-hidden="true" />GROQ · TEXT ONLY (NO SCREENSHOTS)</span>
+          ) : (
+            <span style={{ color: "#ffb4a8" }}>GROQ_API NOT SET ON SERVER</span>
           )
         ) : !status ? null : status.openai.local ? (
           status.openai.oauth.signedIn ? (

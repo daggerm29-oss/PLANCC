@@ -13,7 +13,7 @@ export interface AiMessage {
   raw?: unknown;
 }
 
-export type Provider = "gemini" | "openai";
+export type Provider = "gemini" | "openai" | "groq";
 
 export interface Quota { rpm: number; rpd: number; usedMinute: number; usedToday: number; cooldownSec: number }
 
