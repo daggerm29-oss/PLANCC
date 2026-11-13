@@ -90,13 +90,13 @@ export function parseLocalIntent(raw: string): LocalCall[] | null {
 
   // annotate_place already flies to the place, so "go to X and highlight it" is a single local call.
   const flyHighlight = /^(?:take me to|fly (?:me )?to|go to|navigate to|jump to|head to|show me)\s+(.+?)\s*(?:,|and)\s*(?:then\s+)?(?:highlight|outline|mark)(?: it| that| the (?:border|area|country|region))?$/.exec(t);
-  if (flyHighlight && isPlainPlace(flyHighlight[1])) return [{ name: "annotate_place", args: { place: flyHighlight[1] } }];
+  if (flyHighlight && isPlainPlace(flyHighlight[1])) return [{ name: "annotate_place", args: { place: stripArticle(flyHighlight[1]) } }];
 
   const highlight = /^(?:highlight|outline|mark)\s+(.+)$/.exec(t);
-  if (highlight && isPlainPlace(highlight[1])) return [{ name: "annotate_place", args: { place: highlight[1] } }];
+  if (highlight && isPlainPlace(highlight[1])) return [{ name: "annotate_place", args: { place: stripArticle(highlight[1]) } }];
 
   const fly = /^(?:take me to|fly (?:me )?to|go to|navigate to|jump to|head to)\s+(.+)$/.exec(t);
-  if (fly && isPlainPlace(fly[1])) return [{ name: "fly_to", args: { place: fly[1] } }];
+  if (fly && isPlainPlace(fly[1])) return [{ name: "fly_to", args: { place: stripArticle(fly[1]) } }];
 
   const vis = /^(?:switch to |turn on |enable |go |use |activate )?(.+?)(?: mode| vision| view| filter)?$/.exec(t);
   if (vis && vis[1].split(" ").length <= 3 && !NEEDS_MODEL.test(t)) {
