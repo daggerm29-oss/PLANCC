@@ -2201,6 +2201,8 @@ export default function WorldviewMap() {
           ["REG", a.r || "—"],
           ["POSITION", a.lat !== undefined && a.lon !== undefined ? `${a.lat.toFixed(3)}, ${a.lon.toFixed(3)}` : "N/A"],
         ],
+        media: { kind: "aircraft", hex: a.hex, callsign: a.flight, reg: a.r },
+        position: a.lat !== undefined && a.lon !== undefined ? { lat: a.lat, lon: a.lon } : undefined,
       };
     }
     if (focus.kind === "ship") {
@@ -2226,7 +2228,13 @@ export default function WorldviewMap() {
         const date = Number.isFinite(n) ? new Date(n < 1e12 ? n * 1000 : n) : new Date(String(raw));
         if (!Number.isNaN(date.getTime())) rows.push(["LAST UPDATE", date.toLocaleTimeString()]);
       }
-      return { kind: "ship", title: sh.vessel_name || sh.ship_name || `MMSI ${sh.mmsi}`, color, rows };
+      return {
+        kind: "ship",
+        title: sh.vessel_name || sh.ship_name || `MMSI ${sh.mmsi}`,
+        color,
+        rows,
+        media: { kind: "ship", name: String(sh.vessel_name || sh.ship_name || ""), category: sh.category ? String(sh.category) : undefined },
+      };
     }
     const sat = satPosMap.get(focus.id);
     if (!sat) return null;
@@ -2234,6 +2242,7 @@ export default function WorldviewMap() {
       kind: "satellite",
       title: sat.name,
       color: sat.color,
+      media: { kind: "satellite", name: sat.name },
       rows: [
         ["ORIGIN", sat.origin],
         ["CLASS", sat.intelClass],
