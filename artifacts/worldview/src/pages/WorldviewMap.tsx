@@ -1428,10 +1428,27 @@ export default function WorldviewMap() {
           } catch { /* ignore */ }
           try { map.setSky({ "atmosphere-blend": 0 }); } catch { /* ignore */ }
         }
-      } catch { /* style not ready yet — handled by once('idle') below */ }
+        return true;
+      } catch {
+        return false;
+      }
     };
-    if (map.isStyleLoaded()) apply();
-    else map.once("idle", apply);
+    // isStyleLoaded() also waits on every source finishing its tiles, and "idle" never fires while
+    // the live aircraft layer keeps repainting — so gating on either left the toggle a no-op.
+    // setProjection only needs the style itself, so apply now and retry briefly if it isn't parsed yet.
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+    const tryApply = () => {
+      if (cancelled) return;
+      if (apply() || ++attempts > 40) return;
+      timer = setTimeout(tryApply, 150);
+    };
+    tryApply();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [viewMode, mapLoadedState]);
 
   useEffect(() => {
@@ -1788,8 +1805,7 @@ export default function WorldviewMap() {
             duration: 1000,
           });
         };
-        if (map.isStyleLoaded()) restore();
-        else map.once("idle", restore);
+        restore();
         preTrackCameraRef.current = null;
       }
       return;
