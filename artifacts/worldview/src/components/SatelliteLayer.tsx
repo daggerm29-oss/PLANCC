@@ -302,79 +302,80 @@ const EARTH_R_KM = 6371;
 // ─────────────────────────────────────────────────────────────────────────────
 // Globe-aware altitude projection
 // ─────────────────────────────────────────────────────────────────────────────
-// MapLibre's map.project() maps surface lat/lng to screen pixels, but cannot
-// project points above the surface.  We derive the correct screen-space
-// displacement for a satellite at altitude by applying the same globe
-// rotation stack that MapLibre uses (lng0 → lat0 → bearing → pitch) to the
-// unit outward normal at the satellite's position, then read off the x/y
-// components — those are exactly the screen-space altitude direction.
-//
-// Returns the screen-pixel offset {dx, dy} to ADD to the projected ground
-// point, plus a `visible` flag (back-hemisphere points return visible=false).
-function computeGlobeAltitudeOffset(
-  latDeg: number, lngDeg: number,
-  altFraction: number,               // visual altitude as fraction of Earth radius
-  centerLat: number, centerLng: number,
-  bearing: number, pitch: number,
-  earthRadiusPx: number,
-): { dx: number; dy: number; visible: boolean; depth: number } {
-  const lat0  = centerLat * Math.PI / 180;
-  const lng0  = centerLng * Math.PI / 180;
-  const latR  = latDeg    * Math.PI / 180;
-  const lngR  = lngDeg    * Math.PI / 180;
-  const bearR = bearing   * Math.PI / 180;
-  const pitR  = pitch     * Math.PI / 180;
+// map.project() only handles surface points. To keep satellites locked to the
+// globe while it rotates, we project them with MapLibre's own globe camera:
+// the view-projection matrix and camera position live in a unit-sphere space
+// (see angularCoordinatesRadiansToVector in maplibre-gl), so a satellite is
+// simply its surface vector scaled by (1 + altFraction). These transform
+// getters are not in the public typings, hence the narrow structural type.
+type GlobeTransformLike = {
+  isGlobeRendering?: boolean;
+  modelViewProjectionMatrix?: ArrayLike<number>;
+  cameraPosition?: ArrayLike<number>;
+  width: number;
+  height: number;
+};
 
-  // Unit outward normal at (lat, lng)  ≡  the altitude direction in globe space
-  let ux = Math.cos(latR) * Math.cos(lngR);
-  let uy = Math.cos(latR) * Math.sin(lngR);
-  let uz = Math.sin(latR);
+type ScreenPoint = { x: number; y: number };
+type SatProjector = (lat: number, lon: number, altFraction: number) => ScreenPoint | null;
 
-  // Step 1 — rotate around Z by −lng0  (bring center longitude to X axis)
-  let vx =  ux * Math.cos(lng0) + uy * Math.sin(lng0);
-  let vy = -ux * Math.sin(lng0) + uy * Math.cos(lng0);
-  let vz = uz;
+// Shrinks Earth slightly for occlusion so icons right at the limb don't flicker.
+const OCCLUSION_RADIUS = 0.995;
 
-  // Step 2 — rotate around Y by (lat0 − π/2)  (bring center latitude to +Z)
-  const angY = lat0 - Math.PI / 2;
-  const cY = Math.cos(angY), sY = Math.sin(angY);
-  let wx =  vx * cY + vz * sY;
-  let wy = vy;
-  let wz = -vx * sY + vz * cY;
+function createSatProjector(map: maplibregl.Map): SatProjector {
+  const t = (map as unknown as { transform: GlobeTransformLike }).transform;
+  const m = t.modelViewProjectionMatrix;
+  const cam = t.cameraPosition;
 
-  // Step 3 — rotate around Z by −bearing
-  const cB = Math.cos(bearR), sB = Math.sin(bearR);
-  let ex =  wx * cB + wy * sB;
-  let ey = -wx * sB + wy * cB;
-  let ez = wz;
+  if (!t.isGlobeRendering || !m || !cam) {
+    return (lat, lon) => {
+      const p = map.project(new maplibregl.LngLat(lon, lat));
+      return { x: p.x, y: p.y };
+    };
+  }
 
-  // Step 4 — rotate around X by −pitch  (camera tilt as world rotation)
-  const cP = Math.cos(pitR), sP = Math.sin(pitR);
-  const fx = ex;
-  const fy = ey * cP + ez * sP;
-  const fz = -ey * sP + ez * cP;   // depth: > 0 = front hemisphere
+  const cx = cam[0], cy = cam[1], cz = cam[2];
+  const camLenSq = cx * cx + cy * cy + cz * cz;
+  const { width, height } = t;
 
-  // Sphere occlusion: with the camera looking down −Z (after the rotation
-  // stack), Earth is a unit sphere at the origin. The satellite sits at
-  // outward-radial distance (1 + altFraction) along the unit normal (fx,fy,fz).
-  // Its 3D position in camera space is therefore:
-  //     p = (fx, fy, fz) * (1 + altFraction)
-  // It is occluded by Earth iff p lies inside the Earth's silhouette
-  // (lateral_distance² < 1) AND it is on the far side (pz < 0).
-  // Adding a small angular safety margin keeps near-horizon icons from
-  // poking through the limb.
-  const r = 1 + altFraction;
-  const pz = fz * r;
-  const lateralSq = (fx * fx + fy * fy) * r * r;
-  // safety: shrink "Earth" silhouette by 1.5% to keep marker bodies clear
-  const occluded = pz < 0 && lateralSq < 0.97 * 0.97;
+  return (lat, lon, altFraction) => {
+    const latR = (lat * Math.PI) / 180;
+    const lonR = (lon * Math.PI) / 180;
+    const r = 1 + altFraction;
+    const cosLat = Math.cos(latR);
+    const px = Math.sin(lonR) * cosLat * r;
+    const py = Math.sin(latR) * r;
+    const pz = Math.cos(lonR) * cosLat * r;
 
-  return {
-    dx:      fx * altFraction * earthRadiusPx,
-    dy:     -fy * altFraction * earthRadiusPx,  // screen Y is inverted
-    visible: !occluded,
-    depth:   pz,                                 // > 0 = in front of Earth center
+    // Ray camera → satellite: hidden if it enters the Earth sphere before arriving.
+    if (altFraction > 0) {
+      const dx = px - cx, dy = py - cy, dz = pz - cz;
+      const a = dx * dx + dy * dy + dz * dz;
+      const b = 2 * (cx * dx + cy * dy + cz * dz);
+      const c = camLenSq - OCCLUSION_RADIUS * OCCLUSION_RADIUS;
+      const disc = b * b - 4 * a * c;
+      if (disc > 0) {
+        const tHit = (-b - Math.sqrt(disc)) / (2 * a);
+        if (tHit > 0 && tHit < 1) return null;
+      }
+    }
+
+    // gl-matrix column-major mat4 × [px, py, pz, 1]
+    const clipX = m[0] * px + m[4] * py + m[8] * pz + m[12];
+    const clipY = m[1] * px + m[5] * py + m[9] * pz + m[13];
+    const clipW = m[3] * px + m[7] * py + m[11] * pz + m[15];
+    if (clipW <= 1e-6) return null; // behind the camera (high orbits when zoomed in)
+
+    return {
+      x: ((clipX / clipW) * 0.5 + 0.5) * width,
+      y: (-(clipY / clipW) * 0.5 + 0.5) * height,
+    };
   };
+}
+
+function visualAltFraction(altKm: number): number {
+  // Logarithmic visual altitude fraction (LEO≈0.24, GPS≈1.0, GEO≈1.1)
+  return Math.log10(1 + altKm / 200) * 0.5;
 }
 
 function horizonRadiusKm(altKm: number): number {
@@ -777,27 +778,13 @@ export function SatelliteLayer({
       const selIds = selectedIdsRef.current;
       const theater = theaterCenterRef.current;
       const aoRadiusKm = proximityRadiusRef.current;
-      const zoom = map.getZoom();
-      const earthRadiusPx = (512 / (2 * Math.PI)) * Math.pow(2, zoom);
-      const mapCenter  = map.getCenter();
-      const bearing    = map.getBearing();
-      const pitch      = map.getPitch();
+      const project = createSatProjector(map);
 
       for (const sat of positions) {
-        // Logarithmic visual altitude fraction (LEO≈0.24, GPS≈1.0, GEO≈1.1)
-        const altFraction = Math.log10(1 + sat.altKm / 200) * 0.5;
-
-        // 3-D globe-aware projection: correct altitude direction + back-face cull
-        const offset = computeGlobeAltitudeOffset(
-          sat.lat, sat.lon, altFraction,
-          mapCenter.lat, mapCenter.lng,
-          bearing, pitch, earthRadiusPx,
-        );
-        if (!offset.visible) continue;     // occluded by Earth → skip
-
-        const groundPos = map.project(new maplibregl.LngLat(sat.lon, sat.lat));
-        const sx = groundPos.x + offset.dx;
-        const sy = groundPos.y + offset.dy;
+        const pos = project(sat.lat, sat.lon, visualAltFraction(sat.altKm));
+        if (!pos) continue; // occluded by Earth or behind the camera
+        const sx = pos.x;
+        const sy = pos.y;
 
         // Skip off-screen
         if (sx < -120 || sx > canvas.width + 120 || sy < -2000 || sy > canvas.height + 120) continue;
@@ -852,6 +839,7 @@ export function SatelliteLayer({
         ctx.strokeRect(sx + size * 0.57, sy - bh * 0.42, size * 0.28, bh * 0.84);
 
         if (isSelected) {
+          const groundPos = project(sat.lat, sat.lon, 0) ?? { x: sx, y: sy };
           // Outer selection ring
           ctx.globalAlpha = 0.65;
           ctx.strokeStyle = color;
@@ -910,26 +898,16 @@ export function SatelliteLayer({
     const findSat = (e: maplibregl.MapMouseEvent): SatPosition | null => {
       const cx = e.point.x;
       const cy = e.point.y;
-      const zoom = map.getZoom();
-      const earthRadiusPx = (512 / (2 * Math.PI)) * Math.pow(2, zoom);
-      const mapCenter = map.getCenter();
-      const bearing   = map.getBearing();
-      const pitch     = map.getPitch();
+      const project = createSatProjector(map);
 
       let closest: SatPosition | null = null;
       let closestDist = 20; // hit radius in px
 
       for (const sat of positionsRef.current) {
-        const altFraction = Math.log10(1 + sat.altKm / 200) * 0.5;
-        const offset = computeGlobeAltitudeOffset(
-          sat.lat, sat.lon, altFraction,
-          mapCenter.lat, mapCenter.lng,
-          bearing, pitch, earthRadiusPx,
-        );
-        if (!offset.visible) continue;
-        const groundPos = map.project(new maplibregl.LngLat(sat.lon, sat.lat));
-        const sx = groundPos.x + offset.dx;
-        const sy = groundPos.y + offset.dy;
+        const pos = project(sat.lat, sat.lon, visualAltFraction(sat.altKm));
+        if (!pos) continue;
+        const sx = pos.x;
+        const sy = pos.y;
         const dist = Math.sqrt((cx - sx) ** 2 + (cy - sy) ** 2);
         if (dist < closestDist) {
           closestDist = dist;
