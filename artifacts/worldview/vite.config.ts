@@ -17,6 +17,7 @@ import aiRouter from "../api-server/src/routes/ai";
 import eventsRouter from "../api-server/src/routes/events";
 import signalsRouter from "../api-server/src/routes/signals";
 import imageryRouter from "../api-server/src/routes/imagery";
+import mediaRouter from "../api-server/src/routes/media";
 
 const require = createRequire(import.meta.url);
 const cesiumPkgDir = path.dirname(require.resolve("cesium/package.json"));
@@ -47,6 +48,7 @@ function apiProxyPlugin(): Plugin {
     router.use(eventsRouter);
     router.use(signalsRouter);
     router.use(imageryRouter);
+    router.use(mediaRouter);
     apiApp.use("/api", router);
     server.middlewares.use(apiApp);
   };

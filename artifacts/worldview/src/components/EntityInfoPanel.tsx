@@ -1,10 +1,14 @@
 import type { TrackKind } from "../lib/tracked-entity";
+import type { EntityMediaQuery } from "../lib/entity-media";
+import { EntityMediaSection } from "./EntityMediaSection";
 
 export interface EntityInfo {
   kind: TrackKind;
   title: string;
   color: string;
   rows: Array<[label: string, value: string]>;
+  media?: EntityMediaQuery;
+  position?: { lat: number; lon: number };
 }
 
 interface Props {
@@ -32,7 +36,7 @@ export function EntityInfoPanel({ info, tracking, onTrack, onExit, onClose }: Pr
         top: 70,
         right: 16,
         bottom: 16,
-        width: 280,
+        width: 300,
         maxWidth: "calc(100vw - 32px)",
         zIndex: 30,
         display: "flex",
@@ -44,7 +48,7 @@ export function EntityInfoPanel({ info, tracking, onTrack, onExit, onClose }: Pr
         WebkitBackdropFilter: "blur(10px)",
         fontFamily: MONO,
         color: "rgba(220,240,255,0.85)",
-        maxHeight: 560,
+        maxHeight: 720,
       }}
     >
       <header
@@ -82,6 +86,7 @@ export function EntityInfoPanel({ info, tracking, onTrack, onExit, onClose }: Pr
         >
           {info.title}
         </h2>
+        {info.media && <EntityMediaSection query={info.media} color={color} position={info.position} />}
         <dl style={{ margin: 0 }}>
           {info.rows.map(([label, value]) => (
             <div

@@ -10,8 +10,10 @@ import aiRouter from "./ai";
 import eventsRouter from "./events";
 import signalsRouter from "./signals";
 import imageryRouter from "./imagery";
+import mediaRouter from "./media";
 
 const router: IRouter = Router();
+router.use(mediaRouter);
 router.use(aiRouter);
 router.use(eventsRouter);
 router.use(signalsRouter);
