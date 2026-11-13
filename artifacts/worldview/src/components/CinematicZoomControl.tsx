@@ -53,7 +53,7 @@ export function CinematicZoomControl({ getRange, minRange, maxRange, onZoom, onR
       style={{
         position: "fixed",
         left: "50%",
-        bottom: 28,
+        bottom: 8,
         transform: "translateX(-50%)",
         zIndex: 40,
         display: "flex",

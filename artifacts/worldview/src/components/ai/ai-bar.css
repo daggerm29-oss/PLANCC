@@ -303,6 +303,11 @@
 }
 
 /* Collapsed launcher */
+/* The 3D view's zoom bar sits at the bottom edge; stack the launcher above it. */
+body:has([aria-label="3D view zoom"]) .ai-launcher {
+  bottom: 62px;
+}
+
 .ai-launcher {
   position: absolute;
   bottom: 20px;
