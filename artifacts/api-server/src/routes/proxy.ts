@@ -566,7 +566,7 @@ router.get("/proxy/region", async (req, res) => {
 // While an upstream fetch is in progress, we continue serving the last cached
 // data to prevent client-side latency stalls.
 
-export const DEFAULT_SHIPS_UPSTREAM_URL = "https://worldview-intel-i09c.onrender.com";
+export const DEFAULT_SHIPS_UPSTREAM_URL = "https://worldview-intel-ihsu.onrender.com";
 const SHIPS_UPSTREAM_URL = (process.env.SHIPS_UPSTREAM_URL || DEFAULT_SHIPS_UPSTREAM_URL).replace(/\/+$/, "");
 const SHIPS_URL = `${SHIPS_UPSTREAM_URL}/api/radar`;
 const DARK_FLEET_URL = `${SHIPS_UPSTREAM_URL}/api/dark-fleet`;
