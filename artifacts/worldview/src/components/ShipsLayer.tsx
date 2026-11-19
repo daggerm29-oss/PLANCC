@@ -70,12 +70,16 @@ export function isAisGapCandidate(s: Ship): boolean {
   return s.is_gap === true || s.source === "DARK_FLEET";
 }
 
+export function isGlobalAis(s: Ship): boolean {
+  return s.source === "AISSTREAM";
+}
+
 /**
  * Bucket a ship into one of the render categories.
  */
 function classifyShip(s: Ship): { color: string; bucket: "ais" | "tanker" | "mil" | "gap" | "other" } {
   if (isAisGapCandidate(s))      return { color: C_GAP,    bucket: "gap"   };
-  if (s.source === "AISSTREAM")  return { color: C_AIS,    bucket: "ais"   };
+  if (isGlobalAis(s))            return { color: C_AIS,    bucket: "ais"   };
   if (s.category === "TANKER")   return { color: C_TANKER, bucket: "tanker"};
   if (s.category === "MILITARY") return { color: C_MIL,    bucket: "mil"   };
   return { color: C_FALLBACK, bucket: "other" };
