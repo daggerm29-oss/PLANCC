@@ -1,4 +1,5 @@
 import { Router, Request, Response } from "express";
+import { readAisSnapshot } from "../lib/aisstream";
 
 const router = Router();
 
@@ -575,7 +576,8 @@ interface ShipsCacheEntry {
   body: unknown;
   fetchedAt: number;
 }
-let shipsCache: ShipsCacheEntry | null = null;
+type MarineTrafficShip = { mmsi?: string | number; source: "MARINETRAFFIC" };
+let shipsCache: { body: MarineTrafficShip[]; fetchedAt: number } | null = null;
 const SHIPS_TTL_MS = 8_000;
 let shipsFetchPromise: Promise<void> | null = null;
 
@@ -595,7 +597,7 @@ async function fetchShipsUpstream(): Promise<void> {
       const body: unknown = await upstream.json();
       if (Array.isArray(body)) {
         shipsCache = {
-          body: body.filter((ship) => ship?.source !== "AISSTREAM"),
+          body: body.filter((ship): ship is MarineTrafficShip => ship?.source === "MARINETRAFFIC"),
           fetchedAt: Date.now(),
         };
       }
@@ -643,13 +645,6 @@ function triggerDarkFleetFetch(): void {
   }
 }
 
-const FALLBACK_SHIPS = [
-  { mmsi: 367123450, vessel_name: "USNS PECOS", lat: 26.54, lon: 56.45, sog: 14.2, cog: 110, last_updated: Date.now(), category: "MILITARY", source: "FUSED_INTEL" },
-  { mmsi: 211987650, vessel_name: "HAMBURG EXPRESS", lat: 25.12, lon: 57.34, sog: 18.5, cog: 142, last_updated: Date.now(), category: "TANKER", source: "FUSED_INTEL", est_barrels: 1200000 },
-  { mmsi: 273445560, vessel_name: "ADMIRAL GORSHKOV", lat: 55.70, lon: 19.80, sog: 15.0, cog: 65, last_updated: Date.now(), category: "MILITARY", source: "FUSED_INTEL" },
-  { mmsi: 636015520, vessel_name: "EVER GIVEN", lat: 12.58, lon: 43.35, sog: 16.4, cog: 320, last_updated: Date.now(), category: "TANKER", source: "MARINETRAFFIC", est_barrels: 1800000 },
-];
-
 const FALLBACK_DARK_FLEET = [
   { mmsi: "470050000", ship_name: "RAHEEB", last_known_lat: 24.990086666666667, last_known_lon: 55.05668166666667, time_went_dark: "2026-10-09T09:51:16.138+00:00", last_sog: 6.9, last_cog: 246.6 },
   { mmsi: "353641000", ship_name: "DAEWOO DIAMOND", last_known_lat: 13.259836666666667, last_known_lon: 80.34889, time_went_dark: "2026-10-09T09:20:32.072+00:00", last_sog: 4.9, last_cog: 352.4 },
@@ -664,27 +659,16 @@ const FALLBACK_DARK_FLEET = [
 ];
 
 router.get("/proxy/ships", async (_req, res) => {
-  const now = Date.now();
-
-  // If cache is fresh (< 8s), serve immediately
-  if (shipsCache && now - shipsCache.fetchedAt < SHIPS_TTL_MS) {
-    res.json(shipsCache.body);
-    return;
-  }
-
-  // Trigger upstream fetch if not already in flight
   triggerShipsFetch();
-
-  // Serve the previous radar snapshot while a refresh is in flight.
-  if (shipsCache) {
-    res.json(shipsCache.body);
+  const [openAis] = await Promise.all([readAisSnapshot(), shipsFetchPromise]);
+  const marineTraffic = shipsCache?.body ?? [];
+  const marineIds = new Set(marineTraffic.map((ship) => String(ship.mmsi).trim()));
+  if (!shipsCache && openAis.length === 0) {
+    res.status(503).json({ error: "Vessel feeds temporarily unavailable" });
     return;
   }
-
-  await shipsFetchPromise;
-
-  const freshShips = shipsCache as ShipsCacheEntry | null;
-  res.json(freshShips?.body ?? FALLBACK_SHIPS);
+  res.set("Vercel-CDN-Cache-Control", "s-maxage=8, stale-while-revalidate=30");
+  res.json([...marineTraffic, ...openAis.filter((ship) => !marineIds.has(String(ship.mmsi)))]);
 });
 
 async function handleDarkFleetProxy(_req: Request, res: Response) {
