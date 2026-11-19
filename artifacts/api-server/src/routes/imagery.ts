@@ -3,7 +3,7 @@ import zlib from "node:zlib";
 import { fromUrl } from "geotiff";
 import proj4 from "proj4";
 import jpeg from "jpeg-js";
-import { geminiChat } from "./ai";
+import { geminiChat } from "./ai.js";
 
 /**
  * Satellite imagery on demand + NASA FIRMS thermal hotspots.

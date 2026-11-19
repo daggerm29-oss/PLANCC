@@ -1,15 +1,15 @@
 import { Router, type IRouter } from "express";
-import healthRouter from "./health";
-import proxyRouter from "./proxy";
-import cctvRouter from "./cctv";
-import configRouter from "./config";
-import trafficRouter from "./traffic";
-import infrastructureRouter from "./infrastructure";
-import launchesRouter from "./launches";
-import aiRouter from "./ai";
-import eventsRouter from "./events";
-import signalsRouter from "./signals";
-import imageryRouter from "./imagery";
+import healthRouter from "./health.js";
+import proxyRouter from "./proxy.js";
+import cctvRouter from "./cctv.js";
+import configRouter from "./config.js";
+import trafficRouter from "./traffic.js";
+import infrastructureRouter from "./infrastructure.js";
+import launchesRouter from "./launches.js";
+import aiRouter from "./ai.js";
+import eventsRouter from "./events.js";
+import signalsRouter from "./signals.js";
+import imageryRouter from "./imagery.js";
 
 const router: IRouter = Router();
 router.use(aiRouter);

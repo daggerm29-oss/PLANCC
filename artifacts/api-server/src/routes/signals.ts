@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { spawn } from "child_process";
 import { cellToBoundary } from "h3-js";
-import { geminiChat } from "./ai";
+import { geminiChat } from "./ai.js";
 
 /**
  * SIGNALS & RF — keyless public feeds:
