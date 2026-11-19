@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip } from "recharts";
 import { FloatingPanel } from "./FloatingPanel";
-import { type Ship, type ShipFilters, isAisGapCandidate } from "./ShipsLayer";
+import { type Ship, type ShipFilters, isAisGapCandidate, isGlobalAis } from "./ShipsLayer";
 
 interface Props {
   ships: Ship[];
@@ -79,7 +79,7 @@ export function MaritimePanel({
   let activeGaps = 0;
   for (const s of ships) {
     if (isAisGapCandidate(s)) activeGaps++;
-    else if (s.source === "AISSTREAM") activeGlobal++;
+    else if (isGlobalAis(s)) activeGlobal++;
     else if (s.category === "TANKER") activeTankers++;
     else if (s.category === "MILITARY") activeMilitary++;
   }
@@ -171,7 +171,7 @@ export function MaritimePanel({
           <div style={{
             fontSize: 8, letterSpacing: "0.2em",
             color: "rgba(0,255,255,0.35)", textTransform: "uppercase",
-          }}>FUSED RADAR · AISSTREAM · MARINETRAFFIC</div>
+          }}>FUSED RADAR · OPEN AIS · MARINETRAFFIC</div>
         </div>
 
         <SectionDivider />

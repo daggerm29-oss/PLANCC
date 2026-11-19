@@ -17,8 +17,8 @@ export interface Ship {
   last_updated?: number;
   /** Upstream classification — TANKER / MILITARY / UNKNOWN or custom. */
   category?: "TANKER" | "MILITARY" | "UNKNOWN" | string;
-  /** Upstream feed origin — AISSTREAM (global) / MARINETRAFFIC / FUSED_INTEL / DARK_FLEET or custom. */
-  source?: "AISSTREAM" | "MARINETRAFFIC" | "FUSED_INTEL" | "DARK_FLEET" | string;
+  /** Upstream feed origin — AISSTREAM / OPEN_AIS (global) / MARINETRAFFIC / FUSED_INTEL / DARK_FLEET or custom. */
+  source?: "AISSTREAM" | "OPEN_AIS" | "MARINETRAFFIC" | "FUSED_INTEL" | "DARK_FLEET" | string;
   dwt?: number;
   est_barrels?: number;
   destination?: string;
@@ -70,12 +70,17 @@ export function isAisGapCandidate(s: Ship): boolean {
   return s.is_gap === true || s.source === "DARK_FLEET";
 }
 
+/** Global civilian AIS: AISStream or the keyless Digitraffic open feed. */
+export function isGlobalAis(s: Ship): boolean {
+  return s.source === "AISSTREAM" || s.source === "OPEN_AIS";
+}
+
 /**
  * Bucket a ship into one of the render categories.
  */
 function classifyShip(s: Ship): { color: string; bucket: "ais" | "tanker" | "mil" | "gap" | "other" } {
   if (isAisGapCandidate(s))      return { color: C_GAP,    bucket: "gap"   };
-  if (s.source === "AISSTREAM")  return { color: C_AIS,    bucket: "ais"   };
+  if (isGlobalAis(s))            return { color: C_AIS,    bucket: "ais"   };
   if (s.category === "TANKER")   return { color: C_TANKER, bucket: "tanker"};
   if (s.category === "MILITARY") return { color: C_MIL,    bucket: "mil"   };
   return { color: C_FALLBACK, bucket: "other" };
