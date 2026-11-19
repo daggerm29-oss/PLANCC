@@ -566,7 +566,7 @@ router.get("/proxy/region", async (req, res) => {
 // While an upstream fetch is in progress, we continue serving the last cached
 // data to prevent client-side latency stalls.
 
-export const DEFAULT_SHIPS_UPSTREAM_URL = "https://worldview-intel-5tuu.onrender.com";
+export const DEFAULT_SHIPS_UPSTREAM_URL = "https://worldview-intel-0xhr.onrender.com";
 const SHIPS_UPSTREAM_URL = (process.env.SHIPS_UPSTREAM_URL || DEFAULT_SHIPS_UPSTREAM_URL).replace(/\/+$/, "");
 const SHIPS_URL = `${SHIPS_UPSTREAM_URL}/api/radar`;
 const DARK_FLEET_URL = `${SHIPS_UPSTREAM_URL}/api/dark-fleet`;
@@ -592,8 +592,13 @@ async function fetchShipsUpstream(): Promise<void> {
       signal: AbortSignal.timeout(60_000),
     });
     if (upstream.ok) {
-      const body = await upstream.json();
-      shipsCache = { body, fetchedAt: Date.now() };
+      const body: unknown = await upstream.json();
+      if (Array.isArray(body)) {
+        shipsCache = {
+          body: body.filter((ship) => ship?.source !== "AISSTREAM"),
+          fetchedAt: Date.now(),
+        };
+      }
     }
   } catch {
     // Upstream unavailable or timed out; retain existing cache (stale on error)
@@ -638,148 +643,11 @@ function triggerDarkFleetFetch(): void {
   }
 }
 
-// ---------- Open AIS (Digitraffic, keyless) ----------
-//
-// Replacement for the rate-limited AISStream global feed. Fintraffic's
-// Digitraffic service publishes live AIS for the Baltic / Nordic waters with
-// no API key, so it never overlaps the Hormuz and Indian radar coverage.
-
-const DIGITRAFFIC_BASE = "https://meri.digitraffic.fi/api/ais/v1";
-const DIGITRAFFIC_HEADERS = {
-  "Accept": "application/json",
-  "Accept-Encoding": "gzip",
-  "Digitraffic-User": "WORLDVIEW/1.0",
-};
-const OPEN_AIS_TTL_MS = 30_000;
-const OPEN_AIS_META_TTL_MS = 10 * 60_000;
-const OPEN_AIS_MAX_AGE_MS = 60 * 60_000;
-
-interface DigitrafficLocation {
-  mmsi: number;
-  geometry?: { coordinates?: [number, number] };
-  properties?: { sog?: number; cog?: number; heading?: number; timestampExternal?: number };
-}
-
-interface DigitrafficVessel {
-  mmsi: number;
-  name?: string;
-  shipType?: number;
-  destination?: string;
-}
-
-interface OpenAisShip {
-  mmsi: number;
-  vessel_name: string;
-  lat: number;
-  lon: number;
-  sog?: number;
-  cog?: number;
-  heading?: number;
-  ship_type?: number;
-  category: string;
-  destination?: string;
-  last_updated: number;
-  source: "OPEN_AIS";
-  feed: "DIGITRAFFIC";
-}
-
-let openAisShips: OpenAisShip[] = [];
-let openAisFetchedAt = 0;
-let openAisFetchPromise: Promise<void> | null = null;
-let openAisMeta = new Map<number, DigitrafficVessel>();
-let openAisMetaFetchedAt = 0;
-
-function categorizeShipType(shipType: number | undefined): string {
-  if (shipType === 35) return "MILITARY";
-  if (shipType !== undefined && shipType >= 80 && shipType <= 89) return "TANKER";
-  return "UNKNOWN";
-}
-
-async function refreshOpenAisMeta(): Promise<void> {
-  if (Date.now() - openAisMetaFetchedAt < OPEN_AIS_META_TTL_MS && openAisMeta.size > 0) return;
-  try {
-    const res = await fetch(`${DIGITRAFFIC_BASE}/vessels`, {
-      headers: DIGITRAFFIC_HEADERS,
-      signal: AbortSignal.timeout(20_000),
-    });
-    if (!res.ok) return;
-    const vessels = (await res.json()) as DigitrafficVessel[];
-    if (!Array.isArray(vessels)) return;
-    openAisMeta = new Map(vessels.map((v) => [v.mmsi, v]));
-    openAisMetaFetchedAt = Date.now();
-  } catch {
-    // Keep previous metadata; positions still render without names.
-  }
-}
-
-async function fetchOpenAis(): Promise<void> {
-  try {
-    const [locationsRes] = await Promise.all([
-      fetch(`${DIGITRAFFIC_BASE}/locations`, {
-        headers: DIGITRAFFIC_HEADERS,
-        signal: AbortSignal.timeout(20_000),
-      }),
-      refreshOpenAisMeta(),
-    ]);
-    if (!locationsRes.ok) return;
-    const body = (await locationsRes.json()) as { features?: DigitrafficLocation[] };
-    if (!Array.isArray(body.features)) return;
-
-    const now = Date.now();
-    const ships: OpenAisShip[] = [];
-    for (const f of body.features) {
-      const coords = f.geometry?.coordinates;
-      const props = f.properties ?? {};
-      if (!coords || typeof coords[0] !== "number" || typeof coords[1] !== "number") continue;
-      const updated = props.timestampExternal ?? now;
-      if (now - updated > OPEN_AIS_MAX_AGE_MS) continue;
-      const meta = openAisMeta.get(f.mmsi);
-      ships.push({
-        mmsi: f.mmsi,
-        vessel_name: meta?.name?.trim() || "UNKNOWN",
-        lat: coords[1],
-        lon: coords[0],
-        sog: props.sog,
-        cog: props.cog,
-        heading: props.heading !== undefined && props.heading < 360 ? props.heading : undefined,
-        ship_type: meta?.shipType,
-        category: categorizeShipType(meta?.shipType),
-        destination: meta?.destination?.trim() || undefined,
-        last_updated: updated,
-        source: "OPEN_AIS",
-        feed: "DIGITRAFFIC",
-      });
-    }
-    openAisShips = ships;
-    openAisFetchedAt = now;
-  } catch {
-    // Retain the previous snapshot on error.
-  } finally {
-    openAisFetchPromise = null;
-  }
-}
-
-function triggerOpenAisFetch(): Promise<void> | null {
-  if (Date.now() - openAisFetchedAt >= OPEN_AIS_TTL_MS && !openAisFetchPromise) {
-    openAisFetchPromise = fetchOpenAis();
-  }
-  return openAisFetchPromise;
-}
-
-function mergeOpenAis(radarBody: unknown): unknown {
-  if (!Array.isArray(radarBody) || openAisShips.length === 0) return radarBody;
-  const seen = new Set(radarBody.map((s: { mmsi?: unknown }) => String(s?.mmsi)));
-  const extra = openAisShips.filter((s) => !seen.has(String(s.mmsi)));
-  return [...radarBody, ...extra];
-}
-
 const FALLBACK_SHIPS = [
   { mmsi: 367123450, vessel_name: "USNS PECOS", lat: 26.54, lon: 56.45, sog: 14.2, cog: 110, last_updated: Date.now(), category: "MILITARY", source: "FUSED_INTEL" },
   { mmsi: 211987650, vessel_name: "HAMBURG EXPRESS", lat: 25.12, lon: 57.34, sog: 18.5, cog: 142, last_updated: Date.now(), category: "TANKER", source: "FUSED_INTEL", est_barrels: 1200000 },
-  { mmsi: 413001230, vessel_name: "COSCO PRIDE", lat: 1.25, lon: 103.85, sog: 12.1, cog: 280, last_updated: Date.now(), category: "UNKNOWN", source: "AISSTREAM" },
   { mmsi: 273445560, vessel_name: "ADMIRAL GORSHKOV", lat: 55.70, lon: 19.80, sog: 15.0, cog: 65, last_updated: Date.now(), category: "MILITARY", source: "FUSED_INTEL" },
   { mmsi: 636015520, vessel_name: "EVER GIVEN", lat: 12.58, lon: 43.35, sog: 16.4, cog: 320, last_updated: Date.now(), category: "TANKER", source: "MARINETRAFFIC", est_barrels: 1800000 },
-  { mmsi: 311000456, vessel_name: "PACIFIC VOYAGER", lat: 34.01, lon: -119.5, sog: 11.8, cog: 215, last_updated: Date.now(), category: "TANKER", source: "AISSTREAM" },
 ];
 
 const FALLBACK_DARK_FLEET = [
@@ -798,38 +666,25 @@ const FALLBACK_DARK_FLEET = [
 router.get("/proxy/ships", async (_req, res) => {
   const now = Date.now();
 
-  const openAisPromise = triggerOpenAisFetch();
-  if (openAisFetchedAt === 0 && openAisPromise) {
-    await openAisPromise;
-  }
-
   // If cache is fresh (< 8s), serve immediately
   if (shipsCache && now - shipsCache.fetchedAt < SHIPS_TTL_MS) {
-    res.json(mergeOpenAis(shipsCache.body));
+    res.json(shipsCache.body);
     return;
   }
 
   // Trigger upstream fetch if not already in flight
   triggerShipsFetch();
 
-  // If we already have cached data, keep serving the last cached data while it waits
+  // Serve the previous radar snapshot while a refresh is in flight.
   if (shipsCache) {
-    res.json(mergeOpenAis(shipsCache.body));
+    res.json(shipsCache.body);
     return;
   }
 
-  // Cold boot with no cache yet: wait for the initial fetch to settle
-  if (shipsFetchPromise) {
-    await shipsFetchPromise;
-  }
+  await shipsFetchPromise;
 
   const freshShips = shipsCache as ShipsCacheEntry | null;
-  if (freshShips) {
-    res.json(mergeOpenAis(freshShips.body));
-    return;
-  }
-
-  res.json(mergeOpenAis(FALLBACK_SHIPS));
+  res.json(freshShips?.body ?? FALLBACK_SHIPS);
 });
 
 async function handleDarkFleetProxy(_req: Request, res: Response) {

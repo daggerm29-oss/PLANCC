@@ -171,7 +171,7 @@ export function MaritimePanel({
           <div style={{
             fontSize: 8, letterSpacing: "0.2em",
             color: "rgba(0,255,255,0.35)", textTransform: "uppercase",
-          }}>FUSED RADAR · OPEN AIS · MARINETRAFFIC</div>
+          }}>FUSED RADAR · MARINETRAFFIC</div>
         </div>
 
         <SectionDivider />
