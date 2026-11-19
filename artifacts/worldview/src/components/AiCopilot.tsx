@@ -267,7 +267,7 @@ export function AiCopilot({ bridgeRef, base }: { bridgeRef: BridgeRef; base: str
 
   const providerNote = !status ? null
     : provider === "gemini" && !status.gemini.configured ? { warn: true, text: "GEMINI_KEY is not set on the server." }
-    : provider === "groq" && !status.groq?.configured ? { warn: true, text: "GROQ_API is not set on the server." }
+    : provider === "groq" && !status.groq?.configured ? { warn: true, text: "GROQ_KEY is not set on the server." }
     : provider === "groq" ? { warn: false, text: "Text only. Groq can't see the map view." }
     : provider === "openai" && !openaiReady && !status.openai.local ? { warn: true, text: "Set OPENAI_API_KEY on the server to use OpenAI here." }
     : null;
