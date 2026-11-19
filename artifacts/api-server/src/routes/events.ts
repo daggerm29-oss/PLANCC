@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { inflateRawSync } from "node:zlib";
-import { geminiChat } from "./ai";
+import { geminiChat } from "./ai.js";
 
 /**
  * Open-web event ingestion, normalised into one geocoded feed.

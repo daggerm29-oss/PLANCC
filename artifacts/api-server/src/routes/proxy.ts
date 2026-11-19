@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { readAisSnapshot } from "../lib/aisstream";
+import { readAisSnapshot } from "../lib/aisstream.js";
 
 const router = Router();
 
