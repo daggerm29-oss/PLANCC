@@ -478,11 +478,13 @@ async function openaiChat(req: Request, body: ChatBody): Promise<ChatOut> {
   return parseResponsesOutput((JSON.parse(txt) as { output: never }).output, model);
 }
 
-// ─── Groq (OpenAI-compatible chat completions, GROQ_API) ─────────────────────
+// ─── Groq (OpenAI-compatible chat completions) ──────────────────────────────
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const groqKey = () =>
-  (process.env.GROQ_API || process.env.GROQ_API_KEY || "").trim().replace(/^['"]|['"]$/g, "");
+  [process.env.GROQ_KEY, process.env.GROQ_API, process.env.GROQ_API_KEY]
+    .map((key) => key?.trim().replace(/^['"]|['"]$/g, "").trim())
+    .find(Boolean) ?? "";
 const GROQ_DEFAULT = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 const GROQ_MODELS = [GROQ_DEFAULT, "openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"].filter((m, i, a) => a.indexOf(m) === i);
 
@@ -535,7 +537,7 @@ function stripNulls(value: unknown): unknown {
 
 async function groqChat(body: ChatBody): Promise<ChatOut> {
   const key = groqKey();
-  if (!key) throw new HttpError(503, "GROQ_API is not set on the server.");
+  if (!key) throw new HttpError(503, "GROQ_KEY is not set on the server.");
   const model = body.model || GROQ_DEFAULT;
   const tools = body.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: nullableOptionals(t.parameters) } }));
   const res = await fetch(GROQ_URL, {
